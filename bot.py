@@ -24,8 +24,7 @@ from aiogram.exceptions import TelegramForbiddenError
 API_TOKEN = '8394122518:AAGwqm3gujAyAQH00WFeP1vqh8AMaTqbKL0' 
 
 # 1. URL вашего хостинга (ТОЛЬКО ДОМЕН)
-# *** ИСПРАВЛЕНИЕ ***: Принудительно используем адрес Render для устранения ошибки PythonAnywhere.
-# Если адрес Render изменится, замените "snowbot-o88c.onrender.com" на новый.
+# *** ИСПРАВЛЕНИЕ ***: Принудительно используем адрес Render, чтобы избежать ошибки PythonAnywhere.
 RENDER_DOMAIN = "snowbot-o88c.onrender.com" 
 WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_HOSTNAME", RENDER_DOMAIN) 
 
@@ -268,13 +267,21 @@ async def start_broadcast(message: Message):
         f"Новые блокировки (пользователь удалил бота): **{blocked_count}**"
     )
 
-# --- ХЭНДЛЕР ДЛЯ РАССЫЛКИ ФОТО/ВИДЕО ---
+# --- ХЭНДЛЕР ДЛЯ РАССЫЛКИ ФОТО/ВИДЕО (ИСПРАВЛЕН) ---
 @dp.message(
+    # Общее условие: Доступ только владельцам
+    F.from_user.id.in_(BOT_OWNERS.keys()), 
+    
     # Условие 1: Медиа с подписью, начинающейся с /broadcast
-    ((F.photo | F.video) & F.caption.startswith("/broadcast")) |
-    # Условие 2: Ответ на медиа командой /broadcast
-    (F.reply_to_message.media_group_id == None & Command("broadcast") & (F.reply_to_message.photo | F.reply_to_message.video)),
-    F.from_user.id.in_(BOT_OWNERS.keys())
+    ((F.photo | F.video) & F.caption.startswith("/broadcast")) | 
+    
+    # Условие 2: Ответ на медиа командой /broadcast (Устранена ошибка приоритета операторов)
+    (
+        F.reply_to_message.media_group_id == None & 
+        F.reply_to_message & # Проверяем, что ответ вообще есть
+        (Command("broadcast")) & # ИСПРАВЛЕНО: дополнительные скобки
+        (F.reply_to_message.photo | F.reply_to_message.video)
+    )
 )
 async def start_broadcast_media(message: Message):
     """Рассылка с медиа-контентом (фото/видео)."""
