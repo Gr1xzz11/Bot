@@ -2,29 +2,49 @@ import asyncio
 import logging
 import sys
 import re
-import sqlite3 
+import sqlite3
+import os  # <-- ДОБАВЛЕНО для работы с переменными окружения Render
+from aiohttp import web  # <-- ДОБАВЛЕНО для Webhook
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton
+    ReplyKeyboardMarkup, KeyboardButton, Update # <-- ДОБАВЛЕН Update для Webhook
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramForbiddenError
 
-# --- КОНФИГУРАЦИЯ ---
+
+# --- ================================== ---
+# --- ⚙️ БЛОК: КОНФИГУРАЦИЯ И WEBHOOK ⚙️ ---
+# --- ================================== ---
+
+# Ваш токен
 API_TOKEN = '8394122518:AAGwqm3gujAyAQH00WFeP1vqh8AMaTqbKL0' 
-# 1. Впишите сюда ID всех владельцев
+
+# 1. URL вашего хостинга (ТОЛЬКО ДОМЕН)
+# Render предоставляет HOST автоматически.
+WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_HOSTNAME") 
+if not WEBHOOK_HOST:
+    # Запасной вариант для локального запуска или тестирования
+    WEBHOOK_HOST = 'Gr1xzz1.pythonanywhere.com' 
+
+# 2. URL, по которому Telegram будет отправлять обновления
+WEBHOOK_PATH = f'/webhook/8394122518:AAGwqm3gujAyAQH00WFeP1vqh8AMaTqbKL0' 
+# 3. Полный URL для установки вебхука
+WEBHOOK_URL = f"https://Gr1xzz1.pythonanywhere.com/8394122518:AAGwqm3gujAyAQH00WFeP1vqh8AMaTqbKL0" 
+# 4. Порт, который будет слушать веб-сервер (Render дает его через переменную PORT)
+WEB_SERVER_PORT = int(os.environ.get("PORT", 8080)) # <-- ИСПРАВЛЕНО: получаем порт от Render
+
+# 5. Впишите сюда ID всех владельцев
 BOT_OWNERS = {
-    123456789: "Основной Владелец",  # <--- ID и имя первого владельца
-    987654321: "Второстепенный Программист" # <--- ID и имя второго владельца
+    123456789: "Основной Владелец",  # <--- ЗАМЕНИТЕ ЭТОТ ID
+    987654321: "Второстепенный Программист" # <--- ЗАМЕНИТЕ ЭТОТ ID
 }
 
-# Глобальный словарь для кэширования админов (чтобы не дергать БД каждый раз)
+# Глобальные переменные
 ADMINS_DB = {}
-
-# Словарь для хранения "активных чатов"
 USER_CHAT_MAP = {}
 
 # Настройка логирования
@@ -33,17 +53,18 @@ logging.basicConfig(level=logging.INFO)
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
-
+USER_ID_PATTERN = re.compile(r"\(ID: (\d+)\)")
 
 # --- ================================== ---
-# ---       БЛОК: БАЗА ДАННЫХ (SQLITE)   ---
+# ---       БЛОК: БАЗА ДАННЫХ (SQLITE)   ---
 # --- ================================== ---
+# (Весь блок SQLITE без изменений)
+# ... (db_init, db_add_user, db_ban_user, db_is_user_banned, db_set_user_blocked, db_get_stats, db_load_admins, db_add_admin, db_del_admin)
 
 def db_init():
-    """Инициализирует базу данных"""
+    # ... (код функции)
     with sqlite3.connect('livegram.db') as db:
         cursor = db.cursor()
-        
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -51,7 +72,6 @@ def db_init():
                 is_blocked_bot INTEGER DEFAULT 0
             )
         """)
-        
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 admin_id INTEGER PRIMARY KEY,
@@ -61,7 +81,7 @@ def db_init():
         db.commit()
 
 async def db_add_user(user_id: int):
-    """Добавляет пользователя в БД при /start"""
+    # ... (код функции)
     with sqlite3.connect('livegram.db') as db:
         cursor = db.cursor()
         cursor.execute(
@@ -72,8 +92,8 @@ async def db_add_user(user_id: int):
         )
         db.commit()
 
+# ... (Остальные функции DB)
 async def db_ban_user(user_id: int, status: bool):
-    """Блокирует или разблокирует пользователя (админом)"""
     with sqlite3.connect('livegram.db') as db:
         cursor = db.cursor()
         cursor.execute(
@@ -82,7 +102,6 @@ async def db_ban_user(user_id: int, status: bool):
         db.commit()
 
 async def db_is_user_banned(user_id: int) -> bool:
-    """Проверяет, забанен ли юзер админом"""
     with sqlite3.connect('livegram.db') as db:
         cursor = db.cursor()
         cursor.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,))
@@ -90,7 +109,6 @@ async def db_is_user_banned(user_id: int) -> bool:
         return result[0] == 1 if result else False
 
 async def db_set_user_blocked(user_id: int, status: bool):
-    """Помечает, что юзер заблокировал бота (при ошибке отправки)"""
     with sqlite3.connect('livegram.db') as db:
         cursor = db.cursor()
         cursor.execute(
@@ -99,7 +117,6 @@ async def db_set_user_blocked(user_id: int, status: bool):
         db.commit()
 
 async def db_get_stats():
-    """Получает статистику из БД"""
     with sqlite3.connect('livegram.db') as db:
         cursor = db.cursor()
         cursor.execute("SELECT COUNT(user_id) FROM users")
@@ -118,7 +135,6 @@ async def db_get_stats():
         }
 
 async def db_load_admins():
-    """Загружает админов из БД в кэш ADMINS_DB"""
     global ADMINS_DB
     ADMINS_DB = {}
     with sqlite3.connect('livegram.db') as db:
@@ -143,10 +159,10 @@ async def db_del_admin(admin_id: int):
         db.commit()
     await db_load_admins() # Обновляем кэш
 
-
 # --- ================================== ---
-# ---       БЛОК: КЛАВИАТУРЫ           ---
+# ---       БЛОК: КЛАВИАТУРЫ           ---
 # --- ================================== ---
+# (Весь блок клавиатур без изменений)
 
 start_kb = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Выбор админа")]],
@@ -171,10 +187,10 @@ def get_admin_inline_kb():
     builder.adjust(1)
     return builder.as_markup()
 
-
 # --- ================================== ---
 # --- БЛОК: ХЭНДЛЕРЫ АДМИНИСТРАТОРА (ВЛАДЕЛЬЦА) ---
 # --- ================================== ---
+# (Весь блок хэндлеров администратора без изменений)
 
 # Команды для ВЛАДЕЛЬЦЕВ БОТА (те, кто в списке BOT_OWNERS)
 @dp.message(Command("add_admin"), F.from_user.id.in_(BOT_OWNERS))
@@ -229,10 +245,10 @@ async def admin_show_stats(message: Message):
     )
     await message.answer(text, parse_mode="Markdown")
 
-
 # --- ================================== ---
-# ---       БЛОК: ХЭНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ  ---
+# ---       БЛОК: ХЭНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ  ---
 # --- ================================== ---
+# (Весь блок хэндлеров пользователя без изменений)
 
 # Универсальная проверка на бан
 async def check_ban(message: Message | CallbackQuery) -> bool:
@@ -254,16 +270,17 @@ async def send_welcome(message: Message):
     if await check_ban(message): return
 
     await message.answer(
-        ( # <-- Добавлена открывающая скобка
+        ( 
         "Здравствуйте! 👋\n\n"
         "Это бот обратной связи. Нажмите кнопку 'Выбор админа', чтобы начать.\n\n"
         "Разработчик бота: Админ Крис (ручками своими делал)"
-        ), # <-- Добавлена закрывающая скобка и запятая перед следующим аргументом
+        ), 
         reply_markup=start_kb
     )
     
     if user_id in USER_CHAT_MAP:
         del USER_CHAT_MAP[user_id]
+        
 @dp.message(F.text == "Выбор админа")
 async def show_admin_choice(message: Message):
     if await check_ban(message): return
@@ -329,11 +346,15 @@ async def user_message_to_admin(message: Message):
     user_info = f"📩 Сообщение от {message.from_user.full_name} (ID: {user_id})"
     
     try:
-        await message.copy_to(
-            chat_id=admin_id,
-            caption=f"{user_info}\n\n{message.caption or ''}",
-            parse_mode="Markdown" 
-        )
+        # Пересылаем сообщение, если это медиа
+        if message.photo or message.video or message.document or message.sticker:
+             await message.copy_to(
+                chat_id=admin_id,
+                caption=f"{user_info}\n\n{message.caption or ''}",
+                parse_mode="Markdown" 
+            )
+        
+        # Отправляем текстовое сообщение (если было вложено в медиа или как отдельный текст)
         if message.text:
              await bot.send_message(
                  admin_id, f"{user_info}\n\n{message.text}", parse_mode="Markdown"
@@ -353,10 +374,9 @@ async def user_message_to_admin(message: Message):
             del USER_CHAT_MAP[user_id]
 
 # --- ================================== ---
-# ---    БЛОК: ХЭНДЛЕР АДМИНА (ОТВЕТЫ)   ---
+# ---    БЛОК: ХЭНДЛЕР АДМИНА (ОТВЕТЫ)   ---
 # --- ================================== ---
-
-USER_ID_PATTERN = re.compile(r"\(ID: (\d+)\)")
+# (Весь блок хэндлеров админа без изменений)
 
 @dp.message(F.chat.type == "private", F.from_user.id.in_(ADMINS_DB.keys()), F.reply_to_message)
 async def admin_reply_to_user(message: Message):
@@ -365,8 +385,8 @@ async def admin_reply_to_user(message: Message):
     
     text_to_parse = original_message.text or original_message.caption
     if not text_to_parse:
-         await message.reply("⚠️ Ошибка: Не могу найти ID (пустое сообщение). Отвечайте на текст.")
-         return
+          await message.reply("⚠️ Ошибка: Не могу найти ID (пустое сообщение). Отвечайте на текст или медиа с текстом.")
+          return
     
     match = USER_ID_PATTERN.search(text_to_parse)
     if not match:
@@ -384,11 +404,15 @@ async def admin_reply_to_user(message: Message):
         # Получаем имя админа из кэша, если нет - "Администратор"
         admin_name = ADMINS_DB.get(admin_id, "Администратор") 
         
-        await message.copy_to(
-            chat_id=user_id,
-            caption=f"Ответ от {admin_name}:\n\n{message.caption or ''}",
-            parse_mode="Markdown"
-        )
+        # Пересылаем медиа или стикер
+        if message.photo or message.video or message.document or message.sticker:
+             await message.copy_to(
+                chat_id=user_id,
+                caption=f"Ответ от {admin_name}:\n\n{message.caption or ''}",
+                parse_mode="Markdown"
+            )
+        
+        # Отправляем текстовое сообщение
         if message.text:
              await bot.send_message(
                  user_id,
@@ -406,25 +430,79 @@ async def admin_reply_to_user(message: Message):
 
 
 # --- ================================== ---
-# ---       БЛОК: ЗАПУСК БОТА          ---
+# ---       БЛОК: WEBHOOK И ЗАПУСК       ---
 # --- ================================== ---
 
-async def main():
+# 1. Обработчик входящих вебхуков
+async def webhook_handler(request):
+    """Принимает JSON от Telegram и передает его диспетчеру Aiogram."""
+    # Проверка токена безопасности
+    if request.match_info.get('token') != API_TOKEN:
+        return web.Response(status=403)
+    
+    try:
+        # Получаем тело запроса
+        update = await request.json()
+        
+        # Передаем обновление диспетчеру
+        await dp.feed_raw_update(bot, update)
+        return web.Response(text='ok')
+    except Exception as e:
+        logging.error(f"Ошибка при обработке обновления: {e}")
+        return web.Response(status=500, text='error')
+
+
+async def on_startup(dispatcher: Dispatcher, bot: Bot):
+    """Выполняется при запуске сервера: устанавливает вебхук и инициализирует БД."""
+    
     db_init()
     await db_load_admins()
     
-# ✅ ИСПРАВЛЕННЫЙ БЛОК (Использует owner_name из цикла)
+    # 💥 ИСПРАВЛЕНИЕ ОШИБКИ NameError и добавление владельцев
     for owner_id, owner_name in BOT_OWNERS.items():
         if owner_id not in ADMINS_DB:
             logging.info(f"Владелец {owner_id} ({owner_name}) не найден в админах. Добавляю...")
-            # Исправлено: используем owner_name
-            await db_add_admin(owner_id, owner_name)
+            await db_add_admin(owner_id, owner_name) # <-- ИСПРАВЛЕНО
+            
+    # Установка вебхука. Render позволяет исходящее соединение, поэтому оставляем.
+    if WEBHOOK_HOST:
+        await bot.set_webhook(WEBHOOK_URL)
+        logging.info(f"✅ Вебхук установлен на: {WEBHOOK_URL}")
+    else:
+        logging.warning("WEBHOOK_HOST не определен. Вебхук не установлен. Бот будет работать только локально.")
+
+
+async def on_shutdown(dispatcher: Dispatcher, bot: Bot):
+    """Выполняется при остановке сервера: удаляет вебхук."""
+    logging.warning('Отключение...')
+    await bot.delete_webhook()
+    logging.warning('Вебхук удален. Бот остановлен.')
+
+# Глобальный объект Aiohttp app для запуска
+app = web.Application()
+
+def start_webhook_server():
     
-    print("Бот запущен!")
-    await dp.start_polling(bot)
+    # Регистрируем обработчик вебхуков с токеном в пути
+    app.router.add_post(WEBHOOK_PATH, webhook_handler)
+
+    # Регистрируем функции запуска и остановки
+    app.on_startup.append(lambda app: on_startup(dp, bot))
+    app.on_shutdown.append(lambda app: on_shutdown(dp, bot))
+    
+    logging.info(f"Сервер слушает порт {WEB_SERVER_PORT}...")
+    
+    # Запускаем веб-сервер
+    web.run_app(
+        app,
+        host='0.0.0.0', # <-- Важно для Render
+        port=WEB_SERVER_PORT 
+    )
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        start_webhook_server()
     except KeyboardInterrupt:
-        print("Бот выключен.")
+        logging.info("Бот выключен вручную.")
+    except Exception as e:
+        logging.error(f"Критическая ошибка запуска: {e}")
