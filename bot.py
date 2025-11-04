@@ -28,7 +28,7 @@ API_TOKEN = '8394122518:AAGwqm3gujAyAQH00WFeP1vqh8AMaTqbKL0'
 WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_HOSTNAME") 
 if not WEBHOOK_HOST:
     # Запасной вариант для локального запуска или тестирования
-    WEBHOOK_HOST = 'Gr1xzz1.pythonanywhere.com' 
+    WEBHOOK_HOST = 'snowbot-o88c.onrender.com' 
 
 # 2. URL, по которому Telegram будет отправлять обновления
 WEBHOOK_PATH = f'/webhook/8394122518:AAGwqm3gujAyAQH00WFeP1vqh8AMaTqbKL0' 
