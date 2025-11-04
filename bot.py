@@ -413,13 +413,12 @@ async def main():
     db_init()
     await db_load_admins()
     
-    # ИЗМЕНЕНИЕ: Добавляем ВСЕХ владельцев в админы
-    # и используем имя из DEFAULT_OWNER_NAME
-    for owner_id in BOT_OWNERS:
+# ✅ ИСПРАВЛЕННЫЙ БЛОК (Использует owner_name из цикла)
+    for owner_id, owner_name in BOT_OWNERS.items():
         if owner_id not in ADMINS_DB:
-            logging.info(f"Владелец {owner_id} не найден в админах. Добавляю...")
-            # Используем имя из переменной
-            await db_add_admin(owner_id, DEFAULT_OWNER_NAME) 
+            logging.info(f"Владелец {owner_id} ({owner_name}) не найден в админах. Добавляю...")
+            # Исправлено: используем owner_name
+            await db_add_admin(owner_id, owner_name)
     
     print("Бот запущен!")
     await dp.start_polling(bot)
